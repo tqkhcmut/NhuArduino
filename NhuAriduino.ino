@@ -27,52 +27,126 @@ struct Data
 
 struct Data stored_data;
 
-#define SEARCH_LEVEL_1  "Search 1"
-#define SEARCH_LEVEL_2  "Search 2"
-#define SEARCH_LEVEL_3  "Search 3"
+#define INVALID_ADDRESS -1
 
 // 0 - Idle
 // 1 - Level 1  "Second"
 // 2 - Level 2  "Minute"
 // 3 - Level 3  "Hour"
 char search_state = 0;
-char search_delay = 0;  
+char search_delay_under_100ms = 0;
+char search_delay_100ms_count = 0;
+char search_report = 0;
 
 void search_process(void)
 {
-  switch(search_state)
+  switch (search_state)
   {
     case 0: // Idle
-      
-    break;
+      if (search_delay_100ms_count > 0)
+      {
+        search_delay_100ms_count--;
+      }
+      else if (search_delay_under_100ms > 0)
+      {
+        //delay(search_delay_under_100ms);
+        search_delay_under_100ms = 0;
+      }
+      else if (search_report != 0)
+      {
+        char search_report_msg[32];
+        memset(search_report_msg, 0, 32);
+        sprintf(search_report_msg, "%i:%s=%i,%i\r\n",
+                stored_data.addr, "search", 1, 1);
+        Serial.write(search_report_msg);
+        search_report = 0;
+      }
+      break;
     case 1: // Level 1
-    delay(stored_data.addr%60 * 20);
-    break;
+      search_delay_100ms_count = ((stored_data.addr % 60) * 20) / 100;
+      search_delay_under_100ms = ((stored_data.addr % 60) * 20) % 100;
+
+      if (search_delay_100ms_count == 0)
+      {
+        // trigger process now
+        delay(search_delay_under_100ms);
+        search_delay_under_100ms = 0;
+        char search_report_msg[32];
+        memset(search_report_msg, 0, 32);
+        sprintf(search_report_msg, "%i:%s=%i,%i\r\n",
+                stored_data.addr, "search", 1, 1);
+        Serial.write(search_report_msg);
+        search_report = 0;
+      }
+      
+      search_report = 1;
+      search_state = 0; // switch back to idle process
+      break;
     case 2: // Level 2
-    delay((stored_data.addr/60)%60 * 20);
-    break;
+      search_delay_100ms_count = (((stored_data.addr / 60) % 60) * 20) / 100;
+      search_delay_under_100ms = (((stored_data.addr / 60) % 60) * 20) % 100;
+
+      if (search_delay_100ms_count == 0)
+      {
+        // trigger process now
+        delay(search_delay_under_100ms);
+        search_delay_under_100ms = 0;
+        char search_report_msg[32];
+        memset(search_report_msg, 0, 32);
+        sprintf(search_report_msg, "%i:%s=%i,%i\r\n",
+                stored_data.addr, "search", 1, 1);
+        Serial.write(search_report_msg);
+        search_report = 0;
+      }
+      
+      search_report = 1;
+      search_state = 0; // switch back to idle process
+      break;
     case 3: // Level 3
-    delay(stored_data.addr/60/60);
-    break;
+      search_delay_100ms_count = ((stored_data.addr / 60 / 60) * 20) / 100;
+      search_delay_under_100ms = ((stored_data.addr / 60 / 60) * 20) % 100;
+      
+      if (search_delay_100ms_count == 0)
+      {
+        // trigger process now
+        delay(search_delay_under_100ms);
+        search_delay_under_100ms = 0;
+        char search_report_msg[32];
+        memset(search_report_msg, 0, 32);
+        sprintf(search_report_msg, "%i:%s=%i,%i\r\n",
+                stored_data.addr, "search", 1, 1);
+        Serial.write(search_report_msg);
+        search_report = 0;
+      }
+      
+      search_report = 1;
+      search_state = 0; // switch back to idle process
+      break;
     default:
-    search_state = 0;
-    break;
+      search_state = 0;
+      break;
   }
 }
 
-
+// <addr>:<command>=<key>,<value>\r
 char _addr[10];
 char _cmd[10];
 char _key[10];
 char _val[10];
 
+// key
+const char key_set = 1;
+const char key_get = 2;
+const char key_rep = 3;
+
 // Command list
+// <addr>:power=<key>,<value>\r
 const char * power = "power";
-// "addr:power=key,val"
-const char * addr = "addr";
-// "addr:power=key,val"
+// <addr>:address=<key>,<value>\r
+const char * address = "address";
+// <addr>:search=<key>,<value>\r
 const char * search = "search";
-// "addr:power=key,val"
+
 
 void analyze(char * line)
 {
@@ -83,59 +157,80 @@ void analyze(char * line)
   memset(_cmd, 0, 10);
   memset(_key, 0, 10);
   memset(_val, 0, 10);
-  
+
   if (strlen(line) > 40)
     return;
-  
+
   point = line;
   sign = strchr(point, ':');
   if (sign == 0)
     return;
-  memcpy(_addr, point, sign-point);
+  memcpy(_addr, point, sign - point);
   point = sign + 1;
   sign = strchr(point, '=');
   if (sign == 0)
     return;
-  memcpy(_cmd, point, sign-point);
+  memcpy(_cmd, point, sign - point);
   point = sign + 1;
   sign = strchr(point, ',');
   if (sign == 0)
     return;
-  memcpy(_key, point, sign-point);
+  memcpy(_key, point, sign - point);
   point = sign + 1;
   memcpy(_val, point, strlen(point));
 }
 int process(char * line)
 {
   analyze(line);
-  int tmp_addr = FORBIDDEN_ADDR;
-  sscanf(_addr, "%i", &tmp_addr);
+  int tmp_addr = atoi(_addr);
+  if (tmp_addr != 0 && tmp_addr != stored_data.addr)
+    return INVALID_ADDRESS;
   if (memcmp(_cmd, power, strlen(power)) == 0)
   {
-    if (_key[0] == '1') // set
+    switch (atoi(_key))
     {
+      case key_set:
+      {
       int power = atoi(_val);
       if (power >= 0 && power <= 255)
         analogWrite(OUTPUT_PIN, power);
-    }
-    if (_key[0] == '2') // query
-    {
+      break;
+      }
+      case key_get:
+      break;
+      case key_rep:
+      break;
     }
   }
-  if (memcmp(_cmd, addr, strlen(addr)) == 0)
+  if (memcmp(_cmd, address, strlen(address)) == 0)
   {
-    if (_key[0] == '0') // set
+    switch (atoi(_key))
     {
-      int addr = atoi(_val);
-    }
-    if (_key[0] == '2') // query
-    {
+    case key_set:
+    break;
+    case key_get:
+    break;
+    case key_rep:
+    break;
     }
   }
   if (memcmp(_cmd, search, strlen(search)) == 0)
   {
-    
+    // process key words
+    switch (atoi(_key))
+    {
+    case key_set:
+    search_state = atoi(_val);
+    break;
+    case key_get:
+    break;
+    case key_rep:
+    break;
+    }
+    // trigger search process intermedily
+    search_process();
   }
+  return 0;
 }
 
 // global line
@@ -149,6 +244,7 @@ void setup() {
   eeprom_read((char *)&stored_data, sizeof(stored_data));
   analogWrite(OUTPUT_PIN, stored_data.power);
 }
+unsigned long process_time = 0;
 
 void loop() {
   memset(gb_line, 0, 50);
@@ -156,4 +252,15 @@ void loop() {
   Serial.readBytesUntil('\r', gb_line, 49);
   process(gb_line);
   Serial.flush();
+  
+  if (millis() - process_time > 100)
+  {
+    // run search progress
+    search_process();
+    
+    // run LED 
+
+    // update process time
+    process_time = millis();
+  }
 }
